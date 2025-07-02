@@ -127,3 +127,11 @@ def calculate_age(birth_date: date) -> int:
     age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
     
     return age
+
+def get_risk_emoji(predicted_class):
+    if predicted_class == "High Risk":
+        return "🔴"
+    elif predicted_class == "Medium Risk":
+        return "🟡"
+    else: # Low Risk
+        return "🟢"

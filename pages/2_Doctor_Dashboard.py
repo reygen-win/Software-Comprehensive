@@ -4,12 +4,78 @@ from ui_components import render_sidebar_and_auth, reset_pagination, render_pagi
 from configs import UserRole, HIGH_RISK_THRESHOLD, LOW_RISK_THRESHOLD, ITEMS_PER_PAGE
 from models import Prediction
 import pandas as pd
-from utils import load_model_artifacts, preprocess_for_prediction, to_float, highlight_risk, calculate_age
+from utils import load_model_artifacts, preprocess_for_prediction, to_float, highlight_risk, calculate_age, get_risk_emoji
 
 
 # --- Initialize Connection and UI Rendering ---
 page = render_sidebar_and_auth(UserRole.DOCTOR)
 db_manager = DatabaseManager()
+
+# Details for viewing a specific patient's history function
+def show_patient_details(patient_id, patient_name):
+    """ Fetch the complete history for this specific patient """
+    st.title(f"History for: {patient_name}")
+
+    if st.button("← Back to Main Dashboard"):
+        st.session_state.viewing_patient_id = None
+        st.session_state.viewing_patient_name = None
+        st.rerun()
+
+    st.divider()
+
+    patient_history = db_manager.get_history_by_patient_id(patient_id)
+    if not patient_history:
+        st.info("No prediction history found for this patient.")
+        return
+
+    # --- Create and Display the Visualization ---
+    st.subheader("Risk Trend Over Time")
+    chart_data = pd.DataFrame(patient_history)
+    chart_data['prediction_timestamp'] = pd.to_datetime(chart_data['prediction_timestamp'])
+    chart_data = chart_data.sort_values(by='prediction_timestamp') # Ensure data is sorted for the chart
+    chart_data.set_index('prediction_timestamp', inplace=True)
+    chart_data = chart_data[['prediction_probability']].rename(columns={'prediction_probability': 'Risk Probability'})
+    
+    st.line_chart(chart_data)
+    
+    # --- Display the Detailed Table ---
+    st.subheader("Detailed History")
+
+    # 1. Slice the patient_history for pagination
+    start_index = st.session_state.page_number * ITEMS_PER_PAGE
+    end_index = start_index + ITEMS_PER_PAGE
+    history_to_display = patient_history[start_index:end_index]
+
+    # 2. Loop over the sliced list
+    for record in patient_history:
+        emoji = get_risk_emoji(record.predicted_class)
+        summary_title = (
+            f"{emoji} {record.prediction_timestamp.strftime('%Y-%m-%d %H:%M:%S')} / "
+            f"Assessed by: Dr. {record.doctor_name} / "
+            f"Risk Level: {record.predicted_class} / "
+            f"Probability: {to_float(record.prediction_probability):.1%}"
+        )
+
+        with st.expander(summary_title, expanded=True):
+            # Display detailed information for each prediction record
+            st.divider()
+            st.markdown("**Prediction Input Features**")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**Patient Age at Visit:** {record.age}")
+                st.markdown(f"**Cancer Stage:** {record.cancer_stage}")
+                st.markdown(f"**Tumor Size:** {record.tumor_size} cm")
+                st.markdown(f"**Tumor Type:** {record.tumor_type}")
+        
+            with col2:
+                st.markdown(f"**Metastasis:** {record.metastasis}")
+                st.markdown(f"**Treatment Type:** {record.treatment_type}")
+                st.markdown(f"**Comorbidities:** {record.comorbidities}")
+            st.divider()
+            
+    # 3. Render pagination controls
+    render_pagination(total_items=len(patient_history), items_per_page=ITEMS_PER_PAGE)
 
 # --- Page Content ---
 if page == "My Dashboard":
@@ -22,43 +88,6 @@ if page == "My Dashboard":
         st.session_state.viewing_patient_id = None
     if 'viewing_patient_name' not in st.session_state:
         st.session_state.viewing_patient_name = None
-    
-    # Details for viewing a specific patient's history function
-    def show_patient_details(patient_id, patient_name):
-        """ Fetch the complete history for this specific patient """
-        st.title(f"History for: {patient_name}")
-
-        if st.button("← Back to Main Dashboard"):
-            st.session_state.viewing_patient_id = None
-            st.session_state.viewing_patient_name = None
-            st.rerun()
-
-        st.divider()
-
-        patient_history = db_manager.get_history_by_patient_id(patient_id)
-        if not patient_history:
-            st.info("No prediction history found for this patient.")
-            return
-
-        # --- Create and Display the Visualization ---
-        st.subheader("Risk Trend Over Time")
-        chart_data = pd.DataFrame(patient_history)
-        chart_data['prediction_timestamp'] = pd.to_datetime(chart_data['prediction_timestamp'])
-        chart_data = chart_data.sort_values(by='prediction_timestamp') # Ensure data is sorted for the chart
-        chart_data.set_index('prediction_timestamp', inplace=True)
-        chart_data = chart_data[['prediction_probability']].rename(columns={'prediction_probability': 'Risk Probability'})
-        
-        st.line_chart(chart_data)
-        
-        # --- Display the Detailed Table ---
-        st.subheader("Detailed History")
-        for record in patient_history:
-            cols = st.columns([2, 2.8, 1.5, 1.5])
-            cols[0].write(record.prediction_timestamp.strftime('%Y-%m-%d %H:%M:%S'))
-            cols[1].write(f"Assessed by: Dr. {record.doctor_name}")
-            cols[2].markdown(f'<span style="{highlight_risk(record.predicted_class)}">{record.predicted_class}</span>', unsafe_allow_html=True)
-            cols[3].write(f"{to_float(record.prediction_probability):.1%}")
-        st.divider()
 
     # --- Main Page Controller ---
     if st.session_state.viewing_patient_id is not None and st.session_state.viewing_patient_name is not None:
@@ -68,7 +97,8 @@ if page == "My Dashboard":
     else:
         cols = st.columns([4, 2, 3])
         with cols[2]:
-            search_query = st.text_input("Search by Patient Name", placeholder="🔍 Search by Patient Name", label_visibility="collapsed", on_change=reset_pagination)
+            search_query = st.text_input("Search by Patient Name", placeholder="🔍 Search by Patient Name",
+                                         label_visibility="collapsed", on_change=reset_pagination)
 
         st.divider()
 
@@ -100,7 +130,11 @@ if page == "My Dashboard":
                 cols = st.columns([3, 2.5, 2.5, 2, 1])
                 cols[0].write(pred.prediction_timestamp)
                 cols[1].write(pred.patient_name)
-                cols[2].markdown(f'<span style="{highlight_risk(pred.predicted_class)}">{pred.predicted_class}</span>', unsafe_allow_html=True)
+                cols[2].markdown(f"""
+                                    <span style="{highlight_risk(pred.predicted_class)}">
+                                    {pred.predicted_class}
+                                    </span>
+                                 """, unsafe_allow_html=True)
                 cols[3].write(f"{to_float(pred.prediction_probability):.2%}")
 
                 with cols[4]:

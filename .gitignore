@@ -41,3 +41,7 @@ Thumbs.db
 
 # Dataset files (if large - uncomment if needed)
 # *.csv
+
+# Docx files
+*.docx
+*.pdf
